@@ -15,9 +15,8 @@
  */
 package exchange.core2.tests.util;
 
-import lombok.NonNull;
-import org.eclipse.collections.impl.map.mutable.primitive.IntIntHashMap;
 import exchange.core2.core.orderbook.IOrderBook;
+import org.eclipse.collections.impl.map.mutable.primitive.IntIntHashMap;
 
 import java.util.*;
 import java.util.function.UnaryOperator;
@@ -29,6 +28,8 @@ public final class TestOrdersGeneratorSession {
     public final int targetOrderBookOrders;
 
     public final long priceDeviation;
+
+    public final boolean avalancheIOC;
 
     public final int numUsers;
     public final UnaryOperator<Integer> uidMapper;
@@ -42,16 +43,18 @@ public final class TestOrdersGeneratorSession {
 
     public final List<Integer> orderBookSizeAskStat = new ArrayList<>();
     public final List<Integer> orderBookSizeBidStat = new ArrayList<>();
-    public final List<Integer> orderBookNumOrdersStat = new ArrayList<>();
+    public final List<Integer> orderBookNumOrdersAskStat = new ArrayList<>();
+    public final List<Integer> orderBookNumOrdersBidStat = new ArrayList<>();
 
-    @NonNull
+    public final long minPrice;
+    public final long maxPrice;
+
     public long lastTradePrice;
 
-    @NonNull
     // set to 1 to make price move up and down
     public int priceDirection;
 
-    public long orderbooksFilledAtSequence = 0;
+    public boolean initialOrdersPlaced = false;
 
     public long numCompleted = 0;
     public long numRejected = 0;
@@ -64,20 +67,32 @@ public final class TestOrdersGeneratorSession {
 
     public int seq = 1;
 
-    public int lastOrderBookOrdersSize = 0;
+    // statistics (updated every 256 orders)
+    public int lastOrderBookOrdersSizeAsk = 0;
+    public int lastOrderBookOrdersSizeBid = 0;
+    public long lastTotalVolumeAsk = 0;
+    public long lastTotalVolumeBid = 0;
 
 //    public SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
 
-    public TestOrdersGeneratorSession(IOrderBook orderBook, int targetOrderBookOrders, long priceDeviation, int numUsers, UnaryOperator<Integer> uidMapper, int symbol, long centralPrice, boolean enableSlidingPrice) {
+    public TestOrdersGeneratorSession(IOrderBook orderBook, int targetOrderBookOrders, boolean avalancheIOC, int numUsers, UnaryOperator<Integer> uidMapper, int symbol, boolean enableSlidingPrice, int seed) {
         this.orderBook = orderBook;
         this.targetOrderBookOrders = targetOrderBookOrders;
-        this.priceDeviation = priceDeviation;
+        this.avalancheIOC = avalancheIOC;
         this.numUsers = numUsers;
         this.uidMapper = uidMapper;
         this.symbol = symbol;
-        this.rand = new Random(symbol);
+        this.rand = new Random(Objects.hash(symbol * -177277, seed * 10037 + 198267));
 
-        this.lastTradePrice = centralPrice;
+        int price = (int) Math.pow(10, 3.3 + rand.nextDouble() * 1.5 + rand.nextDouble() * 1.5);
+
+        this.lastTradePrice = price;
+        this.priceDeviation = Math.min((int) (price * 0.05), 10000);
+        this.minPrice = price - priceDeviation * 5;
+        this.maxPrice = price + priceDeviation * 5;
+
+//        log.debug("Symbol:{} price={} dev={} range({},{})", symbol, price, priceDeviation, minPrice, maxPrice);
+
         this.priceDirection = enableSlidingPrice ? 1 : 0;
     }
 }

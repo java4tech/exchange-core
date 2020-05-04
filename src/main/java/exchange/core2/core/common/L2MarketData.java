@@ -15,7 +15,6 @@
  */
 package exchange.core2.core.common;
 
-import com.google.common.base.Strings;
 import lombok.ToString;
 
 import java.util.Arrays;
@@ -35,8 +34,10 @@ public final class L2MarketData {
 
     public long[] askPrices;
     public long[] askVolumes;
+    public long[] askOrders;
     public long[] bidPrices;
     public long[] bidVolumes;
+    public long[] bidOrders;
 
     // when published
     public long timestamp;
@@ -45,14 +46,16 @@ public final class L2MarketData {
 //    public long totalVolumeAsk;
 //    public long totalVolumeBid;
 
-    public L2MarketData(long[] askPrices, long[] askVolumes, long[] bidPrices, long[] bidVolumes) {
+    public L2MarketData(long[] askPrices, long[] askVolumes, long[] askOrders, long[] bidPrices, long[] bidVolumes, long[] bidOrders) {
         this.askPrices = askPrices;
         this.askVolumes = askVolumes;
+        this.askOrders = askOrders;
         this.bidPrices = bidPrices;
         this.bidVolumes = bidVolumes;
+        this.bidOrders = bidOrders;
 
-        this.askSize = askPrices.length;
-        this.bidSize = bidPrices.length;
+        this.askSize = askPrices != null ? askPrices.length : 0;
+        this.bidSize = bidPrices != null ? bidPrices.length : 0;
     }
 
     public L2MarketData(int askSize, int bidSize) {
@@ -60,6 +63,8 @@ public final class L2MarketData {
         this.bidPrices = new long[bidSize];
         this.askVolumes = new long[askSize];
         this.bidVolumes = new long[bidSize];
+        this.askOrders = new long[askSize];
+        this.bidOrders = new long[bidSize];
     }
 
     public long[] getAskPricesCopy() {
@@ -70,6 +75,10 @@ public final class L2MarketData {
         return Arrays.copyOf(askVolumes, askSize);
     }
 
+    public long[] getAskOrdersCopy() {
+        return Arrays.copyOf(askOrders, askSize);
+    }
+
     public long[] getBidPricesCopy() {
         return Arrays.copyOf(bidPrices, bidSize);
     }
@@ -78,49 +87,35 @@ public final class L2MarketData {
         return Arrays.copyOf(bidVolumes, bidSize);
     }
 
-    public String dumpOrderBook() {
-        int priceWith = maxWidth(2, Arrays.copyOf(askPrices, askSize), Arrays.copyOf(bidPrices, bidSize));
-        int volWith = maxWidth(2, Arrays.copyOf(askVolumes, askSize), Arrays.copyOf(bidVolumes, bidSize));
+    public long[] getBidOrdersCopy() {
+        return Arrays.copyOf(bidOrders, bidSize);
+    }
 
-        StringBuilder s = new StringBuilder("Order book:\n");
-        s.append(".").append(Strings.repeat("-", priceWith - 2)).append("ASKS").append(Strings.repeat("-", volWith - 1)).append(".\n");
-        for (int i = askSize - 1; i >= 0; i--) {
-            String price = Strings.padStart(String.valueOf(this.askPrices[i]), priceWith, ' ');
-            String volume = Strings.padStart(String.valueOf(this.askVolumes[i]), volWith, ' ');
-            s.append(String.format("|%s|%s|\n", price, volume));
+    public long totalOrderBookVolumeAsk() {
+        long totalVolume = 0L;
+        for (int i = 0; i < askSize; i++) {
+            totalVolume += askVolumes[i];
         }
-        s.append("|").append(Strings.repeat("-", priceWith)).append("+").append(Strings.repeat("-", volWith)).append("|\n");
+        return totalVolume;
+    }
+
+    public long totalOrderBookVolumeBid() {
+        long totalVolume = 0L;
         for (int i = 0; i < bidSize; i++) {
-            String price = Strings.padStart(String.valueOf(this.bidPrices[i]), priceWith, ' ');
-            String volume = Strings.padStart(String.valueOf(this.bidVolumes[i]), volWith, ' ');
-            s.append(String.format("|%s|%s|\n", price, volume));
+            totalVolume += bidVolumes[i];
         }
-        s.append("'").append(Strings.repeat("-", priceWith - 2)).append("BIDS").append(Strings.repeat("-", volWith - 1)).append("'\n");
-        return s.toString();
+        return totalVolume;
     }
 
-    private static int maxWidth(int minWidth, long[]... arrays) {
-        return Arrays.stream(arrays)
-                .flatMapToLong(Arrays::stream)
-                .mapToInt(p -> String.valueOf(p).length())
-                .max()
-                .orElse(minWidth);
-    }
-
-    private static int maxWidth(int minWidth, int[]... arrays) {
-        return Arrays.stream(arrays)
-                .flatMapToInt(Arrays::stream)
-                .map(p -> String.valueOf(p).length())
-                .max()
-                .orElse(minWidth);
-    }
 
     public L2MarketData copy() {
         return new L2MarketData(
                 getAskPricesCopy(),
                 getAskVolumesCopy(),
+                getAskOrdersCopy(),
                 getBidPricesCopy(),
-                getBidVolumesCopy());
+                getBidVolumesCopy(),
+                getBidOrdersCopy());
     }
 
     @Override
@@ -135,12 +130,12 @@ public final class L2MarketData {
         }
 
         for (int i = 0; i < askSize; i++) {
-            if (askPrices[i] != o.askPrices[i] || askVolumes[i] != o.askVolumes[i]) {
+            if (askPrices[i] != o.askPrices[i] || askVolumes[i] != o.askVolumes[i] || askOrders[i] != o.askOrders[i]) {
                 return false;
             }
         }
         for (int i = 0; i < bidSize; i++) {
-            if (bidPrices[i] != o.bidPrices[i] || bidVolumes[i] != o.bidVolumes[i]) {
+            if (bidPrices[i] != o.bidPrices[i] || bidVolumes[i] != o.bidVolumes[i] || bidOrders[i] != o.bidOrders[i]) {
                 return false;
             }
         }

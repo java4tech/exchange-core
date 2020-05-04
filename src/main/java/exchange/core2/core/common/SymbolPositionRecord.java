@@ -17,6 +17,7 @@ package exchange.core2.core.common;
 
 
 import exchange.core2.core.processors.RiskEngine;
+import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
@@ -25,12 +26,13 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import java.util.Objects;
 
 @Slf4j
+@NoArgsConstructor
 public final class SymbolPositionRecord implements WriteBytesMarshallable, StateHash {
 
-    public final long uid;
+    public long uid;
 
-    public final int symbol;
-    public final int currency;
+    public int symbol;
+    public int currency;
 
     // open positions state (for margin trades only)
     public PositionDirection direction = PositionDirection.EMPTY;
@@ -44,11 +46,19 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     public long pendingSellSize = 0;
     public long pendingBuySize = 0;
 
-    public SymbolPositionRecord(long uid, int symbol, int currency) {
+    public void initialize(long uid, int symbol, int currency) {
         this.uid = uid;
 
         this.symbol = symbol;
         this.currency = currency;
+
+        this.direction = PositionDirection.EMPTY;
+        this.openVolume = 0;
+        this.openPriceSum = 0;
+        this.profit = 0;
+
+        this.pendingSellSize = 0;
+        this.pendingBuySize = 0;
     }
 
     public SymbolPositionRecord(long uid, BytesIn bytes) {
@@ -56,10 +66,12 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         this.symbol = bytes.readInt();
         this.currency = bytes.readInt();
+
         this.direction = PositionDirection.of(bytes.readByte());
         this.openVolume = bytes.readLong();
         this.openPriceSum = bytes.readLong();
         this.profit = bytes.readLong();
+
         this.pendingSellSize = bytes.readLong();
         this.pendingBuySize = bytes.readLong();
     }
@@ -116,8 +128,8 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
     /**
      * Calculate required margin based on specification and current position/orders
      *
-     * @param spec
-     * @return
+     * @param spec core symbol specification
+     * @return required margin
      */
     public long calculateRequiredMarginForFutures(CoreSymbolSpecification spec) {
         final long specMarginBuy = spec.marginBuy;
@@ -173,6 +185,11 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
      * 1. Un-hold pending size
      * 2. Reduce opposite position accordingly (if exists)
      * 3. Increase forward position accordingly (if size left in the trading event)
+     *
+     * @param action order action
+     * @param size   order size
+     * @param price  order price
+     * @return opened size
      */
     public long updatePositionForMarginTrade(OrderAction action, long size, long price) {
 
@@ -184,7 +201,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
 
         // 3. Increase forward position accordingly (if size left in the trading event)
         if (sizeToOpen > 0) {
-            openPositionFutures(action, sizeToOpen, price);
+            openPositionMargin(action, sizeToOpen, price);
         }
         return sizeToOpen;
     }
@@ -217,7 +234,7 @@ public final class SymbolPositionRecord implements WriteBytesMarshallable, State
         return sizeToOpen;
     }
 
-    private void openPositionFutures(OrderAction action, long sizeToOpen, long tradePrice) {
+    private void openPositionMargin(OrderAction action, long sizeToOpen, long tradePrice) {
         openVolume += sizeToOpen;
         openPriceSum += tradePrice * sizeToOpen;
         direction = PositionDirection.of(action);

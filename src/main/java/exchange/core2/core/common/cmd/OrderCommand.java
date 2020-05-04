@@ -15,11 +15,11 @@
  */
 package exchange.core2.core.common.cmd;
 
-import com.google.common.collect.Lists;
 import exchange.core2.core.common.*;
 import lombok.*;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -43,10 +43,11 @@ public final class OrderCommand implements IOrder {
     public long size;
 
     @Getter
-    // new orders - reserved price for fast moves of GTC bid orders in exchange mode
+    // new orders INPUT - reserved price for fast moves of GTC bid orders in exchange mode
     public long reserveBidPrice;
 
     // required for PLACE_ORDER only;
+    // for CANCEL/MOVE contains original order action (filled by orderbook)
     @Getter
     public OrderAction action;
 
@@ -128,12 +129,13 @@ public final class OrderCommand implements IOrder {
      * Produces garbage
      * For testing only !!!
      *
-     * @return
+     * @return list of events
      */
     public List<MatcherTradeEvent> extractEvents() {
         List<MatcherTradeEvent> list = new ArrayList<>();
         processMatcherEvents(list::add);
-        return Lists.reverse(list);
+        Collections.reverse(list);
+        return list;
     }
 
     // Traverse and remove:
@@ -152,7 +154,7 @@ public final class OrderCommand implements IOrder {
     /**
      * Write only command data, not status or events
      *
-     * @param cmd2
+     * @param cmd2 command to overwrite to
      */
     public void writeTo(OrderCommand cmd2) {
         cmd2.command = this.command;
@@ -168,6 +170,7 @@ public final class OrderCommand implements IOrder {
         cmd2.orderType = this.orderType;
     }
 
+    // slow - testing only
     public OrderCommand copy() {
 
         OrderCommand newCmd = new OrderCommand();
@@ -192,4 +195,13 @@ public final class OrderCommand implements IOrder {
         return newCmd;
     }
 
+    @Override
+    public long getFilled() {
+        return 0;
+    }
+
+    @Override
+    public int stateHash() {
+        throw new UnsupportedOperationException("Command does not represents state");
+    }
 }

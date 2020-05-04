@@ -17,11 +17,15 @@ package exchange.core2.core.processors;
 
 import com.lmax.disruptor.*;
 import exchange.core2.core.common.CoreWaitStrategy;
+import exchange.core2.core.common.MatcherTradeEvent;
+import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.common.cmd.OrderCommandType;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static exchange.core2.core.ExchangeCore.EVENTS_POOLING;
 
 @Slf4j
 public final class GroupingProcessor implements EventProcessor {
@@ -40,13 +44,16 @@ public final class GroupingProcessor implements EventProcessor {
     private final WaitSpinningHelper waitSpinningHelper;
     private final Sequence sequence = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);
 
+    private final SharedPool sharedPool;
+
     private final long msgsInGroupLimit;
 
-    public GroupingProcessor(RingBuffer<OrderCommand> ringBuffer, SequenceBarrier sequenceBarrier, long msgsInGroupLimit, CoreWaitStrategy coreWaitStrategy) {
+    public GroupingProcessor(RingBuffer<OrderCommand> ringBuffer, SequenceBarrier sequenceBarrier, long msgsInGroupLimit, CoreWaitStrategy coreWaitStrategy, SharedPool sharedPool) {
         this.ringBuffer = ringBuffer;
         this.sequenceBarrier = sequenceBarrier;
         this.waitSpinningHelper = new WaitSpinningHelper(ringBuffer, sequenceBarrier, GROUP_SPIN_LIMIT, coreWaitStrategy);
         this.msgsInGroupLimit = msgsInGroupLimit;
+        this.sharedPool = sharedPool;
     }
 
     @Override
@@ -103,6 +110,13 @@ public final class GroupingProcessor implements EventProcessor {
         long l2dataLastNs = 0;
         boolean triggerL2DataRequest = false;
 
+        final int tradeEventChainLengthTarget = sharedPool.getChainLength();
+        MatcherTradeEvent tradeEventHead = null;
+        MatcherTradeEvent tradeEventTail = null;
+        int tradeEventCounter = 0; // counter
+
+        boolean groupingEnabled = true;
+
         while (true) {
             try {
 
@@ -112,33 +126,78 @@ public final class GroupingProcessor implements EventProcessor {
                 if (nextSequence <= availableSequence) {
                     while (nextSequence <= availableSequence) {
 
-                        OrderCommand cmd = ringBuffer.get(nextSequence);
+                        final OrderCommand cmd = ringBuffer.get(nextSequence);
+
                         nextSequence++;
 
-                        // some commands should trigger R2 stage to avoid unprocessed state in events
+                        if (cmd.command == OrderCommandType.GROUPING_CONTROL) {
+                            groupingEnabled = cmd.orderId == 1;
+                            cmd.resultCode = CommandResultCode.SUCCESS;
+                        }
+
+                        if (!groupingEnabled) {
+                            // TODO pooling
+                            cmd.matcherEvent = null;
+                            cmd.marketData = null;
+                            continue;
+                        }
+
+                        // some commands should trigger R2 stage to avoid unprocessed events that could affect accounting state
                         if (cmd.command == OrderCommandType.RESET
                                 || cmd.command == OrderCommandType.PERSIST_STATE_MATCHING
-                                || cmd.command == OrderCommandType.BINARY_DATA) {
+                                || cmd.command == OrderCommandType.GROUPING_CONTROL) {
+                            groupCounter++;
+                            msgsInGroup = 0;
+                        }
+
+                        // report/binary commands also should trigger R2 stage, but only for last message
+                        if ((cmd.command == OrderCommandType.BINARY_DATA_COMMAND || cmd.command == OrderCommandType.BINARY_DATA_QUERY) && cmd.symbol == -1) {
                             groupCounter++;
                             msgsInGroup = 0;
                         }
 
                         cmd.eventsGroup = groupCounter;
 
-                        cmd.serviceFlags = 0;
+
                         if (triggerL2DataRequest) {
                             triggerL2DataRequest = false;
                             cmd.serviceFlags = 1;
+                        } else {
+                            cmd.serviceFlags = 0;
                         }
 
-                        // cleaning attached objects
-                        cmd.marketData = null;
+                        // cleaning attached events
+                        if (EVENTS_POOLING && cmd.matcherEvent != null) {
+
+                            // update tail
+                            if (tradeEventTail == null) {
+                                tradeEventHead = cmd.matcherEvent; //?
+                            } else {
+                                tradeEventTail.nextEvent = cmd.matcherEvent;
+                            }
+
+                            tradeEventTail = cmd.matcherEvent;
+                            tradeEventCounter++;
+
+                            // find last element in the chain and update tail accordingly
+                            while (tradeEventTail.nextEvent != null) {
+                                tradeEventTail = tradeEventTail.nextEvent;
+                                tradeEventCounter++;
+                            }
+
+                            if (tradeEventCounter >= tradeEventChainLengthTarget) {
+                                // chain is big enough -> send to the shared pool
+                                tradeEventCounter = 0;
+                                sharedPool.putChain(tradeEventHead);
+                                tradeEventTail = null;
+                                tradeEventHead = null;
+                            }
+
+                        }
                         cmd.matcherEvent = null;
 
-                        if (cmd.command == OrderCommandType.NOP) {
-                            // just set next group and pass
-                            continue;
-                        }
+                        // TODO collect to shared buffer
+                        cmd.marketData = null;
 
                         msgsInGroup++;
 
@@ -176,5 +235,12 @@ public final class GroupingProcessor implements EventProcessor {
                 nextSequence++;
             }
         }
+    }
+
+    @Override
+    public String toString() {
+        return "GroupingProcessor{" +
+                "GL=" + msgsInGroupLimit +
+                '}';
     }
 }

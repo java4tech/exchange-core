@@ -16,7 +16,9 @@
 package exchange.core2.core.orderbook;
 
 import exchange.core2.core.common.IOrder;
+import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.Getter;
@@ -25,7 +27,6 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
-import org.apache.commons.lang3.builder.EqualsBuilder;
 
 import java.util.*;
 import java.util.function.Consumer;
@@ -78,11 +79,15 @@ public final class OrdersBucketNaiveImpl implements IOrdersBucket {
      * Collect a list of matching orders starting from eldest records
      * Completely matching orders will be removed, partially matched order kept in the bucked.
      *
-     * @param volumeToCollect
-     * @return
+     * @param volumeToCollect     - volume to collect
+     * @param activeOrder         -  (ignore orders same uid)
+     * @param triggerCmd          - triggered command (taker data)
+     * @param removeOrderCallback - called to remove order
+     * @param helper              - events helper
+     * @return - total matched volume
      */
     @Override
-    public long match(long volumeToCollect, IOrder activeOrder, OrderCommand triggerCmd, Consumer<Order> removeOrderCallback) {
+    public long match(long volumeToCollect, IOrder activeOrder, OrderCommand triggerCmd, Consumer<Order> removeOrderCallback, OrderBookEventsHelper helper) {
 
 //        log.debug("---- match: {}", volumeToCollect);
         final long ignoreUid = activeOrder.getUid();
@@ -114,7 +119,11 @@ public final class OrdersBucketNaiveImpl implements IOrdersBucket {
             // remove from order book filled orders
             boolean fullMatch = order.size == order.filled;
 
-            OrderBookEventsHelper.sendTradeEvent(triggerCmd, activeOrder, order, fullMatch, volumeToCollect == 0, price, v);
+            final MatcherTradeEvent tradeEvent = helper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v,
+                    order.action == OrderAction.ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice);
+
+            tradeEvent.nextEvent = triggerCmd.matcherEvent;
+            triggerCmd.matcherEvent = tradeEvent;
 
             if (fullMatch) {
                 removeOrderCallback.accept(order);
@@ -180,9 +189,7 @@ public final class OrdersBucketNaiveImpl implements IOrdersBucket {
         if (o == null) return false;
         if (!(o instanceof IOrdersBucket)) return false;
         IOrdersBucket other = (IOrdersBucket) o;
-        return new EqualsBuilder()
-                .append(price, other.getPrice())
-                .append(getAllOrders(), other.getAllOrders())
-                .isEquals();
+        return price == other.getPrice()
+                && getAllOrders().equals(other.getAllOrders());
     }
 }

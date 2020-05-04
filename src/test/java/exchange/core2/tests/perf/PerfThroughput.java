@@ -15,9 +15,8 @@
  */
 package exchange.core2.tests.perf;
 
-import exchange.core2.tests.util.ExchangeTestContainer;
-import exchange.core2.tests.util.TestConstants;
-import exchange.core2.tests.util.ThroughputTestsModule;
+import exchange.core2.core.common.config.PerformanceConfiguration;
+import exchange.core2.tests.util.*;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
 
@@ -34,56 +33,115 @@ public final class PerfThroughput {
      * 6-threads CPU can run this test
      */
     @Test
-    public void testThroughputMargin() throws Exception {
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(2 * 1024, 1, 1, 1536, null)) {
-            ThroughputTestsModule.throughputTestImpl(
-                    container,
-                    3_000_000,
-                    1000,
-                    2000,
-                    50,
-                    TestConstants.CURRENCIES_FUTURES,
-                    1,
-                    ExchangeTestContainer.AllowedSymbolTypes.FUTURES_CONTRACT);
-        }
+    public void testThroughputMargin() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(1536)
+                        .build(),
+                TestDataParameters.singlePairMarginBuilder().build(),
+                50);
     }
 
     @Test
-    public void testThroughputExchange() throws Exception {
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(2 * 1024, 1, 1, 1536, null)) {
-            ThroughputTestsModule.throughputTestImpl(
-                    container,
-                    3_000_000,
-                    1000,
-                    2000,
-                    50,
-                    TestConstants.CURRENCIES_EXCHANGE,
-                    1,
-                    ExchangeTestContainer.AllowedSymbolTypes.CURRENCY_EXCHANGE_PAIR);
-        }
+    public void testThroughputExchange() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(1536)
+                        .build(),
+                TestDataParameters.singlePairExchangeBuilder().build(),
+                50);
+    }
+
+    @Test
+    public void testThroughputPeak() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(1536)
+                        .build(),
+                TestDataParameters.builder()
+                        .totalTransactionsNumber(3_000_000)
+                        .targetOrderBookOrdersTotal(10_000)
+                        .numAccounts(10_000)
+                        .currenciesAllowed(TestConstants.ALL_CURRENCIES)
+                        .numSymbols(100)
+                        .allowedSymbolTypes(ExchangeTestContainer.AllowedSymbolTypes.BOTH)
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER)
+                        .build(),
+                50);
     }
 
     /**
-     * This is high load throughput test for verifying "triple million" capability:
-     * - 10M currency accounts (~3M active users)
-     * - 1M pending limit-orders (in 1K order books)
-     * - 1K symbols
-     * - at least 1M messages per second throughput
+     * This is medium load throughput test for verifying "triple million" capability:
+     * * - 1M active users (3M currency accounts)
+     * * - 1M pending limit-orders
+     * * - 10K symbols
+     * * - 1M+ messages per second target throughput
      * 12-threads CPU and 32GiB RAM is required for running this test in 4+4 configuration.
      */
     @Test
-    public void testThroughputMultiSymbol() throws Exception {
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(64 * 1024, 4, 4, 2048, null)) {
-            ThroughputTestsModule.throughputTestImpl(
-                    container,
-                    5_000_000,
-                    1_000_000,
-                    10_000_000,
-                    25,
-                    TestConstants.ALL_CURRENCIES,
-                    1_000,
-                    ExchangeTestContainer.AllowedSymbolTypes.BOTH);
-        }
+    public void testThroughputMultiSymbolMedium() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(64 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(2048)
+                        .build(),
+                TestDataParameters.mediumBuilder().build(),
+                25);
+    }
+
+    /**
+     * This is high load throughput test for verifying exchange core scalability:
+     * - 3M active users (10M currency accounts)
+     * - 4M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 100K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testThroughputMultiSymbolLarge() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(64 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(2048)
+                        .build(),
+                TestDataParameters.largeBuilder().build(),
+                25);
+    }
+
+    /**
+     * This is high load throughput test for verifying exchange core scalability:
+     * - 7.5M active users (25M currency accounts)
+     * - 25M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 200K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testThroughputMultiSymbolHuge() {
+        ThroughputTestsModule.throughputTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(64 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(2048)
+                        .build(),
+                TestDataParameters.hugeBuilder().build(),
+                25);
     }
 
 }

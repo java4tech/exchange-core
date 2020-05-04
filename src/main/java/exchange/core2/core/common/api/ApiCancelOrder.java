@@ -17,17 +17,19 @@ package exchange.core2.core.common.api;
 
 
 import lombok.Builder;
+import lombok.RequiredArgsConstructor;
 
 @Builder
+@RequiredArgsConstructor
 public final class ApiCancelOrder extends ApiCommand {
 
-    public final long id;
+    public final long orderId;
 
     public final long uid;
     public final int symbol;
 
     @Override
     public String toString() {
-        return "[CANCEL " + id + "]";
+        return "[CANCEL " + orderId + "]";
     }
 }

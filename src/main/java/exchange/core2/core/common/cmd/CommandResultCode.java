@@ -17,6 +17,8 @@ package exchange.core2.core.common.cmd;
 
 import lombok.Getter;
 
+import java.util.Arrays;
+
 @Getter
 public enum CommandResultCode {
     NEW(0),
@@ -43,16 +45,23 @@ public enum CommandResultCode {
 
     USER_MGMT_USER_ALREADY_EXISTS(-4001),
 
-    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ZERO(-4100),
-    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED(-4101),
-    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF(-4102),
+//    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ZERO(-4100),
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_SAME(-4101),
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_ALREADY_APPLIED_MANY(-4102),
+    USER_MGMT_ACCOUNT_BALANCE_ADJUSTMENT_NSF(-4103),
+    USER_MGMT_NON_ZERO_ACCOUNT_BALANCE(-4104),
+
+    USER_MGMT_USER_NOT_SUSPENDABLE_HAS_POSITIONS(-4130),
+    USER_MGMT_USER_NOT_SUSPENDABLE_NON_EMPTY_ACCOUNTS(-4131),
+    USER_MGMT_USER_NOT_SUSPENDED(-4132),
+    USER_MGMT_USER_ALREADY_SUSPENDED(-4133),
 
     USER_MGMT_USER_NOT_FOUND(-4201),
 
     SYMBOL_MGMT_SYMBOL_ALREADY_EXISTS(-5001),
 
     BINARY_COMMAND_FAILED(-8001),
-    STATE_HASH_FAILED(-8003),
+    REPORT_QUERY_UNKNOWN_TYPE(-8003),
     STATE_PERSIST_RISK_ENGINE_FAILED(-8010),
     STATE_PERSIST_MATCHING_ENGINE_FAILED(-8020),
 
@@ -65,6 +74,14 @@ public enum CommandResultCode {
 
     CommandResultCode(int code) {
         this.code = code;
+    }
+
+    public static CommandResultCode mergeToFirstFailed(CommandResultCode... results) {
+
+        return Arrays.stream(results)
+                .filter(r -> r != SUCCESS && r != ACCEPTED)
+                .findFirst()
+                .orElse(Arrays.stream(results).anyMatch(r -> r == SUCCESS) ? SUCCESS : ACCEPTED);
     }
 
 }

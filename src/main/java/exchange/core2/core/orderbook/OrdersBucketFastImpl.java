@@ -16,7 +16,9 @@
 package exchange.core2.core.orderbook;
 
 import exchange.core2.core.common.IOrder;
+import exchange.core2.core.common.MatcherTradeEvent;
 import exchange.core2.core.common.Order;
+import exchange.core2.core.common.OrderAction;
 import exchange.core2.core.common.cmd.OrderCommand;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.Getter;
@@ -25,8 +27,6 @@ import lombok.ToString;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.builder.EqualsBuilder;
 import org.eclipse.collections.api.map.primitive.MutableLongIntMap;
 import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
 
@@ -36,12 +36,11 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
- * Fast version of Order Bucket.<br/>
- * Implementation is optimized for fastest place/remove operations O(1).<br/>
- * Matching operation can be slower though.<br/>
- * <p>
- * Orders are stored in resizable queue array.<br/>
- * Queue is indexed by hashmap for fast cancel/update operations.<br/>
+ * Fast version of Order Bucket.<p>
+ * Implementation is optimized for fastest place/remove operations O(1).<p>
+ * Matching operation can be slower though.<p>
+ * Orders are stored in resizable queue array.<p>
+ * Queue is indexed by hashmap for fast cancel/update operations.
  */
 @Slf4j
 @ToString
@@ -147,12 +146,6 @@ public final class OrdersBucketFastImpl implements IOrdersBucket {
     }
 
 
-    /**
-     * Remove order
-     *
-     * @param orderId
-     * @return
-     */
     @Override
     public Order remove(long orderId, long uid) {
 
@@ -185,9 +178,16 @@ public final class OrdersBucketFastImpl implements IOrdersBucket {
     /**
      * Collect a list of matching orders starting from eldest records
      * Completely matching orders will be removed, partially matched order kept in the bucked.
+     *
+     * @param volumeToCollect     - volume to collect
+     * @param activeOrder         - (ignore orders same uid)
+     * @param triggerCmd          - triggered command
+     * @param removeOrderCallback - callback TODO better solution?
+     * @param eventsHelper        - events helper
+     * @return total matched volume
      */
     @Override
-    public long match(long volumeToCollect, IOrder activeOrder, OrderCommand triggerCmd, Consumer<Order> removeOrderCallback) {
+    public long match(long volumeToCollect, IOrder activeOrder, OrderCommand triggerCmd, Consumer<Order> removeOrderCallback, OrderBookEventsHelper eventsHelper) {
 
         //validate();
 
@@ -241,7 +241,11 @@ public final class OrdersBucketFastImpl implements IOrdersBucket {
             // remove from order book filled orders
             boolean fullMatch = order.size == order.filled;
 
-            OrderBookEventsHelper.sendTradeEvent(triggerCmd, activeOrder, order, fullMatch, volumeToCollect == 0, price, v);
+            final MatcherTradeEvent tradeEvent = eventsHelper.sendTradeEvent(order, fullMatch, volumeToCollect == 0, v,
+                    order.action == OrderAction.ASK ? activeOrder.getReserveBidPrice() : order.reserveBidPrice);
+
+            tradeEvent.nextEvent = triggerCmd.matcherEvent;
+            triggerCmd.matcherEvent = tradeEvent;
 
             if (fullMatch) {
 
@@ -342,16 +346,16 @@ public final class OrdersBucketFastImpl implements IOrdersBucket {
         return OrderBucketImplType.FAST;
     }
 
-    private void printSchema() {
-        StringBuilder s = new StringBuilder();
-        for (Order order : queue) {
-            s.append(order == null ? '.' : 'O');
-        }
-
-        log.debug("       {}", StringUtils.repeat(' ', tail) + "T");
-        log.debug("queue:[{}]", s.toString());
-        log.debug("       {}", StringUtils.repeat(' ', head) + "H");
-    }
+//    private void printSchema() {
+//        StringBuilder s = new StringBuilder();
+//        for (Order order : queue) {
+//            s.append(order == null ? '.' : 'O');
+//        }
+//
+//        log.debug("       {}", StringUtils.repeat(' ', tail) + "T");
+//        log.debug("queue:[{}]", s.toString());
+//        log.debug("       {}", StringUtils.repeat(' ', head) + "H");
+//    }
 
     @Override
     public int getNumOrders() {
@@ -416,10 +420,8 @@ public final class OrdersBucketFastImpl implements IOrdersBucket {
         if (o == null) return false;
         if (!(o instanceof IOrdersBucket)) return false;
         IOrdersBucket other = (IOrdersBucket) o;
-        return new EqualsBuilder()
-                .append(price, other.getPrice())
-                .append(getAllOrders(), other.getAllOrders())
-                .isEquals();
+        return price == other.getPrice()
+                && getAllOrders().equals(other.getAllOrders());
     }
 
 }

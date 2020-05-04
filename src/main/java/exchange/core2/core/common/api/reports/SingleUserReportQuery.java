@@ -15,14 +15,20 @@
  */
 package exchange.core2.core.common.api.reports;
 
-import exchange.core2.core.common.ReportType;
+import exchange.core2.core.common.Order;
+import exchange.core2.core.common.UserProfile;
+import exchange.core2.core.processors.MatchingEngineRouter;
+import exchange.core2.core.processors.RiskEngine;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
+import org.eclipse.collections.impl.map.mutable.primitive.IntObjectHashMap;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-public class SingleUserReportQuery implements ReportQuery<SingleUserReportResult> {
+public final class SingleUserReportQuery implements ReportQuery<SingleUserReportResult> {
 
     private final long uid;
 
@@ -39,13 +45,53 @@ public class SingleUserReportQuery implements ReportQuery<SingleUserReportResult
     }
 
     @Override
-    public ReportType getReportType() {
-        return ReportType.SINGLE_USER_REPORT;
+    public int getReportTypeCode() {
+        return ReportType.SINGLE_USER_REPORT.getCode();
     }
 
     @Override
     public Function<Stream<BytesIn>, SingleUserReportResult> getResultBuilder() {
         return SingleUserReportResult::merge;
+    }
+
+    @Override
+    public Optional<SingleUserReportResult> process(MatchingEngineRouter matchingEngine) {
+        final IntObjectHashMap<List<Order>> orders = new IntObjectHashMap<>();
+        matchingEngine.getOrderBooks().forEach(ob -> orders.put(ob.getSymbolSpec().symbolId, ob.findUserOrders(this.uid)));
+
+        //log.debug("orders: {}", orders.size());
+        return Optional.of(new SingleUserReportResult(uid, null, null, null, orders, SingleUserReportResult.QueryExecutionStatus.OK));
+    }
+
+    @Override
+    public Optional<SingleUserReportResult> process(RiskEngine riskEngine) {
+
+        if (!riskEngine.uidForThisHandler(this.uid)) {
+            return Optional.empty();
+        }
+        final UserProfile userProfile = riskEngine.getUserProfileService().getUserProfile(this.uid);
+
+        if (userProfile != null) {
+            final IntObjectHashMap<SingleUserReportResult.Position> positions = new IntObjectHashMap<>(userProfile.positions.size());
+            userProfile.positions.forEachKeyValue((symbol, pos) ->
+                    positions.put(symbol, new SingleUserReportResult.Position(
+                            pos.currency,
+                            pos.direction,
+                            pos.openVolume,
+                            pos.openPriceSum,
+                            pos.profit,
+                            pos.pendingSellSize,
+                            pos.pendingBuySize)));
+
+            return Optional.of(SingleUserReportResult.createFromRiskEngineFound(
+                    uid,
+                    userProfile.userStatus,
+                    userProfile.accounts,
+                    positions));
+        } else {
+            // not found
+            return Optional.of(SingleUserReportResult.createFromRiskEngineNotFound(uid));
+        }
     }
 
     @Override

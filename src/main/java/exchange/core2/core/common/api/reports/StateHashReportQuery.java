@@ -15,29 +15,41 @@
  */
 package exchange.core2.core.common.api.reports;
 
-import exchange.core2.core.common.ReportType;
+import exchange.core2.core.processors.MatchingEngineRouter;
+import exchange.core2.core.processors.RiskEngine;
 import lombok.NoArgsConstructor;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
 
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
 @NoArgsConstructor
-public class StateHashReportQuery implements ReportQuery<StateHashReportResult> {
+public final class StateHashReportQuery implements ReportQuery<StateHashReportResult> {
 
     public StateHashReportQuery(BytesIn bytesIn) {
         // do nothing
     }
 
     @Override
-    public ReportType getReportType() {
-        return ReportType.STATE_HASH;
+    public int getReportTypeCode() {
+        return ReportType.STATE_HASH.getCode();
     }
 
     @Override
     public Function<Stream<BytesIn>, StateHashReportResult> getResultBuilder() {
         return StateHashReportResult::merge;
+    }
+
+    @Override
+    public Optional<StateHashReportResult> process(MatchingEngineRouter matchingEngine) {
+        return Optional.of(new StateHashReportResult(0, matchingEngine.stateHash()));
+    }
+
+    @Override
+    public Optional<StateHashReportResult> process(RiskEngine riskEngine) {
+        return Optional.of(new StateHashReportResult(riskEngine.stateHash(), 0));
     }
 
     @Override

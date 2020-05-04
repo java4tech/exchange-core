@@ -15,15 +15,14 @@
  */
 package exchange.core2.core.orderbook;
 
-import com.google.common.collect.ObjectArrays;
 import exchange.core2.core.common.*;
 import exchange.core2.core.common.cmd.CommandResultCode;
 import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.processors.ObjectsPool;
 import exchange.core2.core.utils.SerializationUtils;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.chronicle.bytes.BytesIn;
 import net.openhft.chronicle.bytes.BytesOut;
-import org.apache.commons.lang3.ArrayUtils;
 import org.eclipse.collections.impl.map.mutable.primitive.LongObjectHashMap;
 
 import java.util.*;
@@ -60,11 +59,16 @@ public final class OrderBookFastImpl implements IOrderBook {
     // Hashtable for fast (cached) resolving OrderId -> Bucket
     private final LongObjectHashMap<IOrdersBucket> idMapToBucket = new LongObjectHashMap<>();
 
-    // Object pools
+    // Object pools // TODO use objects pool
     private final ArrayDeque<Order> ordersPool = new ArrayDeque<>(16384);
     private final ArrayDeque<IOrdersBucket> bucketsPool = new ArrayDeque<>(16384);
 
-    public OrderBookFastImpl(final int hotPricesRange, final CoreSymbolSpecification symbolSpec) {
+    // Object pools
+    private final ObjectsPool objectsPool;
+
+    private final OrderBookEventsHelper eventsHelper;
+
+    public OrderBookFastImpl(final int hotPricesRange, final CoreSymbolSpecification symbolSpec, final ObjectsPool objectsPool) {
         // must be aligned by 64 bit, can not be lower than 1024
         if ((hotPricesRange & 63) != 0 || hotPricesRange < 1024) {
             throw new IllegalArgumentException("invalid hotPricesRange=" + hotPricesRange);
@@ -77,9 +81,12 @@ public final class OrderBookFastImpl implements IOrderBook {
         this.hotBidBuckets = new LongObjectHashMap<>();
         this.farAskBuckets = new TreeMap<>();
         this.farBidBuckets = new TreeMap<>(Collections.reverseOrder());
+        this.objectsPool = objectsPool;
+        this.eventsHelper = new OrderBookEventsHelper(() -> objectsPool.getSharedPool().getChain());
+
     }
 
-    public OrderBookFastImpl(final BytesIn bytes) {
+    public OrderBookFastImpl(final BytesIn bytes, final ObjectsPool objectsPool) {
 
         this.symbolSpec = new CoreSymbolSpecification(bytes);
 
@@ -100,6 +107,9 @@ public final class OrderBookFastImpl implements IOrderBook {
 
         this.farAskBuckets = SerializationUtils.readLongMap(bytes, TreeMap::new, IOrdersBucket::create);
         this.farBidBuckets = SerializationUtils.readLongMap(bytes, () -> new TreeMap<>(Collections.reverseOrder()), IOrdersBucket::create);
+
+        this.objectsPool = objectsPool;
+        this.eventsHelper = new OrderBookEventsHelper(() -> objectsPool.getSharedPool().getChain());
 
         // reconstruct ordersId-> Bucket cache
         // TODO check resulting performance
@@ -139,14 +149,14 @@ public final class OrderBookFastImpl implements IOrderBook {
         }
 
         if (orderType == OrderType.IOC) {
-            OrderBookEventsHelper.attachRejectEvent(cmd, size - filledSize);
+            eventsHelper.attachRejectEvent(cmd, size - filledSize);
             return CommandResultCode.SUCCESS;
         }
 
         final long orderId = cmd.orderId;
         if (idMapToBucket.containsKey(orderId)) {
             // duplicate order id - can match, but can not place
-            OrderBookEventsHelper.attachRejectEvent(cmd, size - filledSize);
+            eventsHelper.attachRejectEvent(cmd, size - filledSize);
             return CommandResultCode.MATCHING_DUPLICATE_ORDER_ID;
         }
 
@@ -180,7 +190,7 @@ public final class OrderBookFastImpl implements IOrderBook {
     }
 
     /**
-     * Calculate base price so the given price would be in the center of the hotPricesRange range.<br/>
+     * Calculate base price so the given price would be in the center of the hotPricesRange range.<p>
      * Will also do the 'long' alignment for faster bitset shift operations.
      *
      * @param price - central price
@@ -324,7 +334,7 @@ public final class OrderBookFastImpl implements IOrderBook {
             // matching orders within bucket
             final long sizeLeft = activeOrder.getSize() - filled;
             // log.debug("bucket {} match size: {}", bucket.getPrice(), sizeLeft);
-            filled += bucket.match(sizeLeft, activeOrder, triggerCmd, this::removeFullyMatchedOrder);
+            filled += bucket.match(sizeLeft, activeOrder, triggerCmd, this::removeFullyMatchedOrder, eventsHelper);
 
             // remove bucket if its empty
             if (bucket.getTotalVolume() == 0) {
@@ -403,20 +413,20 @@ public final class OrderBookFastImpl implements IOrderBook {
      * @return true if order removed, false if not found (can be removed/matched earlier)
      */
     @Override
-    public boolean cancelOrder(OrderCommand cmd) {
+    public CommandResultCode cancelOrder(OrderCommand cmd) {
 
         // can not remove because uid is not verified yet
         IOrdersBucket ordersBucket = idMapToBucket.get(cmd.orderId);
         if (ordersBucket == null) {
             // order already matched and removed from order book previously
-            return false;
+            return CommandResultCode.MATCHING_UNKNOWN_ORDER_ID;
         }
 
         // remove order and whole bucket if bucket is empty
         Order removedOrder = ordersBucket.remove(cmd.orderId, cmd.uid);
         if (removedOrder == null) {
             // uid is different
-            return false;
+            return CommandResultCode.MATCHING_UNKNOWN_ORDER_ID;
         }
 
         // remove from map
@@ -428,12 +438,15 @@ public final class OrderBookFastImpl implements IOrderBook {
         }
 
         // send cancel event
-        OrderBookEventsHelper.sendCancelEvent(cmd, removedOrder);
+        eventsHelper.sendCancelEvent(cmd, removedOrder);
+
+        // fill action fields (for events handling)
+        cmd.action = removedOrder.getAction();
 
         // saving free object back to the pool
         ordersPool.addLast(removedOrder);
 
-        return true;
+        return CommandResultCode.SUCCESS;
     }
 
 
@@ -488,6 +501,9 @@ public final class OrderBookFastImpl implements IOrderBook {
         final long newPrice = cmd.price;
         order.price = newPrice;
 
+        // fill action fields (for events handling)
+        cmd.action = order.getAction();
+
         // try match with new price
         long filled = tryMatchInstantly(order, order.filled, cmd);
         if (filled == order.size) {
@@ -504,6 +520,7 @@ public final class OrderBookFastImpl implements IOrderBook {
             // override cache record
             idMapToBucket.put(orderId, otherBucket);
         }
+
         return CommandResultCode.SUCCESS;
     }
 
@@ -730,7 +747,7 @@ public final class OrderBookFastImpl implements IOrderBook {
      * @return - order
      */
     @Override
-    public Order getOrderById(long orderId) {
+    public IOrder getOrderById(long orderId) {
         IOrdersBucket bucket = idMapToBucket.get(orderId);
         return (bucket != null) ? bucket.findOrder(orderId) : null;
     }
@@ -750,6 +767,7 @@ public final class OrderBookFastImpl implements IOrderBook {
                 IOrdersBucket bucket = hotAskBuckets.get(indexToPrice(next));
                 data.askPrices[i] = bucket.getPrice();
                 data.askVolumes[i] = bucket.getTotalVolume();
+                data.askOrders[i] = bucket.getNumOrders();
                 if (++i == size) {
                     data.askSize = size;
                     return;
@@ -762,6 +780,7 @@ public final class OrderBookFastImpl implements IOrderBook {
         for (IOrdersBucket bucket : farAskBuckets.values()) {
             data.askPrices[i] = bucket.getPrice();
             data.askVolumes[i] = bucket.getTotalVolume();
+            data.askOrders[i] = bucket.getNumOrders();
             if (++i == size) {
                 data.askSize = size;
                 return;
@@ -789,6 +808,7 @@ public final class OrderBookFastImpl implements IOrderBook {
                 IOrdersBucket bucket = hotBidBuckets.get(indexToPrice(next));
                 data.bidPrices[i] = bucket.getPrice();
                 data.bidVolumes[i] = bucket.getTotalVolume();
+                data.bidOrders[i] = bucket.getNumOrders();
                 if (++i == size) {
                     data.bidSize = size;
                     return;
@@ -802,6 +822,7 @@ public final class OrderBookFastImpl implements IOrderBook {
         for (IOrdersBucket bucket : farBidBuckets.values()) {
             data.bidPrices[i] = bucket.getPrice();
             data.bidVolumes[i] = bucket.getTotalVolume();
+            data.bidOrders[i] = bucket.getNumOrders();
             if (++i == size) {
                 data.bidSize = size;
                 return;
@@ -813,13 +834,13 @@ public final class OrderBookFastImpl implements IOrderBook {
     }
 
     @Override
-    public int getTotalAskBuckets() {
-        return hotAskBuckets.size() + farAskBuckets.size();
+    public int getTotalAskBuckets(final int limit) {
+        return Math.min(limit, hotAskBuckets.size() + farAskBuckets.size());
     }
 
     @Override
-    public int getTotalBidBuckets() {
-        return hotBidBuckets.size() + farBidBuckets.size();
+    public int getTotalBidBuckets(final int limit) {
+        return Math.min(limit, hotBidBuckets.size() + farBidBuckets.size());
     }
 
     @Override
@@ -972,7 +993,7 @@ public final class OrderBookFastImpl implements IOrderBook {
     }
 
     @Override
-    public Stream<Order> askOrdersStream(final boolean sorted) {
+    public Stream<IOrder> askOrdersStream(final boolean sorted) {
         // TODO sorted version is slow
         final Stream<IOrdersBucket> hotStream = sorted ? hotAskBuckets.toSortedList().stream() : hotAskBuckets.stream();
         return Stream.concat(hotStream, farAskBuckets.values().stream())
@@ -980,7 +1001,7 @@ public final class OrderBookFastImpl implements IOrderBook {
     }
 
     @Override
-    public Stream<Order> bidOrdersStream(final boolean sorted) {
+    public Stream<IOrder> bidOrdersStream(final boolean sorted) {
         // TODO sorted version is slow
         final Stream<IOrdersBucket> hotStream = sorted ? hotBidBuckets.toSortedList().reverseThis().stream() : hotBidBuckets.stream();
         return Stream.concat(hotStream, farBidBuckets.values().stream())
@@ -990,35 +1011,43 @@ public final class OrderBookFastImpl implements IOrderBook {
 
     // for testing only
     @Override
-    public int getOrdersNum() {
-        //validateInternalState();
-
-        // TODO add trees
-        int ah = hotAskBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
-        int bh = hotBidBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
-        int af = farAskBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
-        int bf = farBidBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
-
-//        log.debug("idMap:{} askOrders:{} bidOrders:{}", idMap.size(), askOrders, bidOrders);
-        int knownOrders = idMapToBucket.size();
-
-        assert knownOrders == ah + af + bh + bf : "inconsistent known orders";
-
-        return idMapToBucket.size();
+    public int getOrdersNum(OrderAction action) {
+        if (action == OrderAction.ASK) {
+            int ah = hotAskBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
+            int af = farAskBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
+            return ah + af;
+        } else {
+            int bh = hotBidBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
+            int bf = farBidBuckets.values().stream().mapToInt(IOrdersBucket::getNumOrders).sum();
+            return bh + bf;
+        }
     }
 
-    private IOrdersBucket[] getBidsAsArray() {
-        final IOrdersBucket[] farBids = farBidBuckets.values().toArray(new IOrdersBucket[0]);
-        final IOrdersBucket[] hotBids = hotBidBuckets.toSortedMap(k -> k, v -> v).values().toArray(new IOrdersBucket[hotBidBuckets.size()]);
-        ArrayUtils.reverse(hotBids);
-        return ObjectArrays.concat(hotBids, farBids, IOrdersBucket.class);
+    @Override
+    public long getTotalOrdersVolume(OrderAction action) {
+        if (action == OrderAction.ASK) {
+            long ah = hotAskBuckets.values().stream().mapToLong(IOrdersBucket::getTotalVolume).sum();
+            long af = farAskBuckets.values().stream().mapToLong(IOrdersBucket::getTotalVolume).sum();
+            return ah + af;
+        } else {
+            long bh = hotBidBuckets.values().stream().mapToLong(IOrdersBucket::getTotalVolume).sum();
+            long bf = farBidBuckets.values().stream().mapToLong(IOrdersBucket::getTotalVolume).sum();
+            return bh + bf;
+        }
     }
 
-    private IOrdersBucket[] getAsksAsArray() {
-        final IOrdersBucket[] farAsks = farAskBuckets.values().toArray(new IOrdersBucket[0]);
-        final IOrdersBucket[] hotAsks = hotAskBuckets.toSortedMap(k -> k, v -> v).values().toArray(new IOrdersBucket[hotAskBuckets.size()]);
-        return ObjectArrays.concat(hotAsks, farAsks, IOrdersBucket.class);
-    }
+//    private IOrdersBucket[] getBidsAsArray() {
+//        final IOrdersBucket[] farBids = farBidBuckets.values().toArray(new IOrdersBucket[0]);
+//        final IOrdersBucket[] hotBids = hotBidBuckets.toSortedMap(k -> k, v -> v).values().toArray(new IOrdersBucket[hotBidBuckets.size()]);
+//        ArrayUtils.reverse(hotBids);
+//        return ObjectArrays.concat(hotBids, farBids, IOrdersBucket.class);
+//    }
+//
+//    private IOrdersBucket[] getAsksAsArray() {
+//        final IOrdersBucket[] farAsks = farAskBuckets.values().toArray(new IOrdersBucket[0]);
+//        final IOrdersBucket[] hotAsks = hotAskBuckets.toSortedMap(k -> k, v -> v).values().toArray(new IOrdersBucket[hotAskBuckets.size()]);
+//        return ObjectArrays.concat(hotAsks, farAsks, IOrdersBucket.class);
+//    }
 
     @Override
     public void writeMarshallable(BytesOut bytes) {
@@ -1041,23 +1070,6 @@ public final class OrderBookFastImpl implements IOrderBook {
 
         SerializationUtils.marshallLongMap(farAskBuckets, bytes);
         SerializationUtils.marshallLongMap(farBidBuckets, bytes);
-    }
-
-    @Override
-    public int hashCode() {
-        final IOrdersBucket[] a = getAsksAsArray();
-        final IOrdersBucket[] b = getBidsAsArray();
-//        for(IOrdersBucket ord: a) log.debug("ask {}", ord);
-//        for(IOrdersBucket ord: b) log.debug("bid {}", ord);
-        //log.debug("FAST A:{} B:{}", a, b);
-        return IOrderBook.hash(a, b, symbolSpec);
-        //log.debug("{} {} {} {} {}", hash, hotAskBuckets.size(), farAskBuckets.size(), hotBidBuckets.size(), farBidBuckets.size());
-    }
-
-
-    @Override
-    public boolean equals(Object o) {
-        return IOrderBook.equals(this, o);
     }
 
 }

@@ -15,208 +15,199 @@
  */
 package exchange.core2.tests.perf;
 
-import exchange.core2.tests.util.*;
-import lombok.extern.slf4j.Slf4j;
-import net.openhft.affinity.AffinityLock;
-import org.HdrHistogram.Histogram;
-import org.HdrHistogram.SingleWriterRecorder;
-import org.junit.Test;
-import exchange.core2.core.common.CoreSymbolSpecification;
-import exchange.core2.core.common.api.ApiCommand;
-import exchange.core2.core.ExchangeApi;
+import exchange.core2.core.common.config.InitialStateConfiguration;
+import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
-import exchange.core2.tests.util.LatencyTools;
-import exchange.core2.tests.util.TestOrdersGenerator;
-import exchange.core2.tests.util.UserCurrencyAccountsGenerator;
+import exchange.core2.tests.util.TestDataParameters;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.Test;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.PrintStream;
-import java.util.BitSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.function.BiFunction;
-import java.util.stream.IntStream;
-
-import static org.junit.Assert.assertEquals;
+import static exchange.core2.tests.util.LatencyTestsModule.latencyTestImpl;
 
 @Slf4j
 public final class PerfLatency {
 
-    private static final boolean WRITE_HDR_HISTOGRAMS = false;
-
     /**
      * This is latency test for simplified conditions
-     * - one symbol
+     * - one symbol (margin mode)
      * - ~1K active users (2K currency accounts)
      * - 1K pending limit-orders (in one order book)
      * 6-threads CPU can run this test
      */
-
     @Test
     public void testLatencyMargin() {
-
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(2 * 1024, 1, 1, 512, null)) {
-            latencyTestImpl(
-                    container,
-                    3_000_000,
-                    1_000,
-                    2_000,
-                    TestConstants.CURRENCIES_FUTURES,
-                    1,
-                    ExchangeTestContainer.AllowedSymbolTypes.FUTURES_CONTRACT,
-                    20);
-        }
-    }
-
-    @Test
-    public void testLatencyExchange() {
-
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(2 * 1024, 1, 1, 512, null)) {
-            latencyTestImpl(
-                    container,
-                    3_000_000,
-                    1_000,
-                    2_000,
-                    TestConstants.CURRENCIES_EXCHANGE,
-                    1,
-                    ExchangeTestContainer.AllowedSymbolTypes.CURRENCY_EXCHANGE_PAIR,
-                    20);
-        }
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(2 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.singlePairMarginBuilder().build(),
+                InitialStateConfiguration.CLEAN_TEST,
+                16);
     }
 
     /**
-     * This is high load latency test for verifying "triple million" capability:
-     * - 10M currency accounts 3M active users
-     * - 1M pending limit-orders (in 1K order books)
-     * - 1K symbols
-     * - at least 1M messages per second throughput
-     * 12-threads CPU and 32GiB RAM is required for running this test in 4+4 configuration.
+     * This is latency test for simplified conditions
+     * - one symbol (exchange mode)
+     * - ~1K active users (2K currency accounts)
+     * - 1K pending limit-orders (in one order book)
+     * 6-threads CPU can run this test
      */
     @Test
-    public void testLatencyMultiSymbol() {
-        try (final ExchangeTestContainer container = new ExchangeTestContainer(64 * 1024, 4, 2, 2048, null)) {
-            latencyTestImpl(
-                    container,
-                    5_000_000,
-                    1_000_000,
-                    10_000_000,
-                    TestConstants.ALL_CURRENCIES,
-                    1_000,
-                    ExchangeTestContainer.AllowedSymbolTypes.BOTH,
-                    10);
-        }
+    public void testLatencyExchange() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(2 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.singlePairExchangeBuilder().build(),
+                InitialStateConfiguration.CLEAN_TEST,
+                16);
     }
 
+    /**
+     * This is medium load latency test for verifying "triple million" capability:
+     * - 1M active users (3M currency accounts)
+     * - 1M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 10K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolMedium() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.mediumBuilder().build(),
+                InitialStateConfiguration.CLEAN_TEST,
+                4);
+    }
 
-    private void latencyTestImpl(final ExchangeTestContainer container,
-                                 final int totalTransactionsNumber,
-                                 final int targetOrderBookOrdersTotal,
-                                 final int numAccounts,
-                                 final Set<Integer> currenciesAllowed,
-                                 final int numSymbols,
-                                 final ExchangeTestContainer.AllowedSymbolTypes allowedSymbolTypes,
-                                 final int warmupCycles) {
+    /**
+     * This is high load latency test for verifying exchange core scalability:
+     * - 3M active users (10M currency accounts)
+     * - 4M pending limit-orders
+     * - 1M+ messages per second throughput
+     * - 100K symbols
+     * - less than 1 millisecond 99.99% latency
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolLarge() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.largeBuilder().build(),
+                InitialStateConfiguration.CLEAN_TEST,
+                3);
+    }
 
-        final int targetTps = 200_000; // transactions per second
-        final int targetTpsStep = 100_000;
+    /**
+     * This is high load latency test for verifying exchange core scalability:
+     * - 7.5M active users (25M currency accounts)
+     * - 25M pending limit-orders
+     * - 200K symbols
+     * - 1M+ messages per second throughput
+     * 12-threads CPU and 32GiB RAM is required for running this test in 2+4 configuration.
+     */
+    @Test
+    public void testLatencyMultiSymbolHuge() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(64 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.hugeBuilder().build(),
+                InitialStateConfiguration.CLEAN_TEST,
+                2);
+    }
 
-        final int warmupTps = 1_000_000;
+    /*
+     * -------------- Disk Journaling tests -----------------
+     */
 
-        try (final AffinityLock cpuLock = AffinityLock.acquireLock()) {
+    @Test
+    public void testLatencyMarginJournaling() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(2 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.singlePairMarginBuilder().build(),
+                InitialStateConfiguration.cleanStartJournaling(ExchangeTestContainer.timeBasedExchangeId()),
+                16);
+    }
 
-            final ExchangeApi api = container.api;
+    @Test
+    public void testLatencyExchangeJournaling() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(2 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.singlePairExchangeBuilder().build(),
+                InitialStateConfiguration.cleanStartJournaling(ExchangeTestContainer.timeBasedExchangeId()),
+                16);
+    }
 
-            final List<CoreSymbolSpecification> coreSymbolSpecifications = ExchangeTestContainer.generateRandomSymbols(numSymbols, currenciesAllowed, allowedSymbolTypes);
+    @Test
+    public void testLatencyMultiSymbolMediumJournaling() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.mediumBuilder().build(),
+                InitialStateConfiguration.cleanStartJournaling(ExchangeTestContainer.timeBasedExchangeId()),
+                4);
+    }
 
-            final List<BitSet> usersAccounts = UserCurrencyAccountsGenerator.generateUsers(numAccounts, currenciesAllowed);
+    @Test
+    public void testLatencyMultiSymbolLargeJournaling() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.largeBuilder().build(),
+                InitialStateConfiguration.cleanStartJournaling(ExchangeTestContainer.timeBasedExchangeId()),
+                3);
+    }
 
-            final TestOrdersGenerator.MultiSymbolGenResult genResult = TestOrdersGenerator.generateMultipleSymbols(
-                    coreSymbolSpecifications,
-                    totalTransactionsNumber,
-                    usersAccounts,
-                    targetOrderBookOrdersTotal);
-
-            final SingleWriterRecorder hdrRecorder = new SingleWriterRecorder(Integer.MAX_VALUE, 2);
-
-            // TODO - first run should validate the output (orders are accepted and processed properly)
-
-            final BiFunction<Integer, Boolean, Boolean> testIteration = (tps, warmup) -> {
-                try {
-
-                    container.initBasicSymbols();
-                    container.addSymbols(coreSymbolSpecifications);
-                    container.userAccountsInit(usersAccounts);
-
-                    hdrRecorder.reset();
-                    final CountDownLatch latchFill = new CountDownLatch(genResult.getApiCommandsFill().size());
-                    container.setConsumer(cmd -> latchFill.countDown());
-                    genResult.getApiCommandsFill().forEach(api::submitCommand);
-                    latchFill.await();
-
-                    final CountDownLatch latchBenchmark = new CountDownLatch(genResult.getApiCommandsBenchmark().size());
-
-                    container.setConsumer(cmd -> {
-                        final long latency = System.nanoTime() - cmd.timestamp;
-                        hdrRecorder.recordValue(Math.min(latency, Integer.MAX_VALUE));
-                        latchBenchmark.countDown();
-                    });
-
-                    final int nanosPerCmd = 1_000_000_000 / tps;
-                    final long startTimeMs = System.currentTimeMillis();
-
-                    long plannedTimestamp = System.nanoTime();
-
-                    for (ApiCommand cmd : genResult.getApiCommandsBenchmark()) {
-                        while (System.nanoTime() < plannedTimestamp) {
-                            // spin while too early for sending next message
-                        }
-                        cmd.timestamp = plannedTimestamp;
-                        api.submitCommand(cmd);
-                        plannedTimestamp += nanosPerCmd;
-                    }
-
-                    latchBenchmark.await();
-                    final long processingTimeMs = System.currentTimeMillis() - startTimeMs;
-                    final float perfMt = (float) genResult.getApiCommandsBenchmark().size() / (float) processingTimeMs / 1000.0f;
-                    String tag = String.format("%.3f MT/s", perfMt);
-                    final Histogram histogram = hdrRecorder.getIntervalHistogram();
-                    log.info("{} {}", tag, LatencyTools.createLatencyReportFast(histogram));
-
-                    // compare orderBook final state just to make sure all commands executed same way
-                    // TODO compare events, balances, positions
-                    coreSymbolSpecifications.forEach(
-                            symbol -> assertEquals(genResult.getGenResults().get(symbol.symbolId).getFinalOrderBookSnapshot(), container.requestCurrentOrderBook(symbol.symbolId)));
-
-                    if (WRITE_HDR_HISTOGRAMS) {
-                        final PrintStream printStream = new PrintStream(new File(System.currentTimeMillis() + "-" + perfMt + ".perc"));
-                        //log.info("HDR 50%:{}", hdr.getValueAtPercentile(50));
-                        histogram.outputPercentileDistribution(printStream, 1000.0);
-                    }
-
-                    container.resetExchangeCore();
-
-                    System.gc();
-                    Thread.sleep(300);
-
-                    // stop testing if median latency above 1 millisecond
-                    return warmup || histogram.getValueAtPercentile(50.0) < 1_000_000;
-
-                } catch (InterruptedException | FileNotFoundException ex) {
-                    throw new IllegalStateException(ex);
-                }
-            };
-
-            log.debug("Warming up {} cycles...", warmupCycles);
-            IntStream.range(0, warmupCycles)
-                    .forEach(i -> testIteration.apply(warmupTps, true));
-            log.debug("Warmup done, starting tests");
-
-            final boolean ignore = IntStream.range(0, 10000)
-                    .map(i -> targetTps + targetTpsStep * i)
-                    .mapToObj(tps -> testIteration.apply(tps, false))
-                    .allMatch(x -> x);
-        }
+    @Test
+    public void testLatencyMultiSymbolHugeJournaling() {
+        latencyTestImpl(
+                PerformanceConfiguration.latencyPerformanceBuilder()
+                        .ringBufferSize(64 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(256)
+                        .build(),
+                TestDataParameters.hugeBuilder().build(),
+                InitialStateConfiguration.cleanStartJournaling(ExchangeTestContainer.timeBasedExchangeId()),
+                2);
     }
 }

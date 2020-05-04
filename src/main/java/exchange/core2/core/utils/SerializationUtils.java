@@ -15,6 +15,10 @@
  */
 package exchange.core2.core.utils;
 
+import lombok.extern.slf4j.Slf4j;
+import net.jpountz.lz4.LZ4Compressor;
+import net.jpountz.lz4.LZ4Factory;
+import net.jpountz.lz4.LZ4FastDecompressor;
 import net.openhft.chronicle.bytes.*;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
@@ -37,6 +41,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+@Slf4j
 public class SerializationUtils {
 
 
@@ -50,6 +55,32 @@ public class SerializationUtils {
         return longs;
     }
 
+    public static long[] bytesToLongArrayLz4(final LZ4Compressor lz4Compressor, final NativeBytes<Void> bytes, final int padding) {
+        int originalSize = (int) bytes.readRemaining();
+//        log.debug("COMPRESS originalSize={}", originalSize);
+
+        final ByteBuffer byteBuffer = ByteBuffer.allocate(originalSize);
+
+        bytes.read(byteBuffer);
+
+        byteBuffer.flip();
+
+        final ByteBuffer byteBufferCompressed = ByteBuffer.allocate(4 + lz4Compressor.maxCompressedLength(originalSize));
+        byteBufferCompressed.putInt(originalSize);// override with compressed length
+        lz4Compressor.compress(byteBuffer, byteBufferCompressed);
+
+        byteBufferCompressed.flip();
+
+        int compressedBytesLen = byteBufferCompressed.remaining();
+
+        return toLongsArray(
+                byteBufferCompressed.array(),
+                byteBufferCompressed.arrayOffset(),
+                compressedBytesLen,
+                padding);
+    }
+
+
     public static long[] toLongsArray(final byte[] bytes, final int padding) {
 
         final int longLength = requiredLongArraySize(bytes.length, padding);
@@ -61,6 +92,19 @@ public class SerializationUtils {
         longBuffer.get(longArray);
         return longArray;
     }
+
+    public static long[] toLongsArray(final byte[] bytes, final int offset, final int length, final int padding) {
+
+        final int longLength = requiredLongArraySize(length, padding);
+        long[] longArray = new long[longLength];
+        //log.debug("byte[{}]={}", bytes.length, bytes);
+        final ByteBuffer allocate = ByteBuffer.allocate(longLength * 8 * 2);
+        final LongBuffer longBuffer = allocate.asLongBuffer();
+        allocate.put(bytes, offset, length);
+        longBuffer.get(longArray);
+        return longArray;
+    }
+
 
     public static int requiredLongArraySize(final int bytesLength, final int padding) {
         int len = requiredLongArraySize(bytesLength);
@@ -89,10 +133,25 @@ public class SerializationUtils {
 
         bytes.write(bytesArray);
 
-        //byte[] array = bytes1.underlyingObject().array();
-        //byteBuffer.get(array);
+        return WireType.RAW.apply(bytes);
+    }
 
-        //log.debug("{}", bytesArray);
+    public static Wire longsLz4ToWire(long[] dataArray, int longsTransfered) {
+
+//        log.debug("long dataArray.len={} longsTransfered={}", dataArray.length, longsTransfered);
+
+        final ByteBuffer byteBuffer = ByteBuffer.allocate(longsTransfered * 8);
+        byteBuffer.asLongBuffer().put(dataArray, 0, longsTransfered);
+
+        final int originalSizeBytes = byteBuffer.getInt();
+
+        final ByteBuffer uncompressedByteBuffer = ByteBuffer.allocate(originalSizeBytes);
+
+        final LZ4FastDecompressor lz4FastDecompressor = LZ4Factory.fastestInstance().fastDecompressor();
+
+        lz4FastDecompressor.decompress(byteBuffer, byteBuffer.position(), uncompressedByteBuffer, uncompressedByteBuffer.position(), originalSizeBytes);
+
+        final Bytes<ByteBuffer> bytes = Bytes.wrapForRead(uncompressedByteBuffer);
 
         return WireType.RAW.apply(bytes);
     }
@@ -280,6 +339,21 @@ public class SerializationUtils {
         return list;
     }
 
+    public static <T> void marshallNullable(final T object, final BytesOut bytes, final BiConsumer<T, BytesOut> marshaller) {
+        bytes.writeBoolean(object != null);
+        if (object != null) {
+            marshaller.accept(object, bytes);
+        }
+    }
+
+    public static <T> T preferNotNull(final T a, final T b) {
+        return a == null ? b : a;
+    }
+
+    public static <T> T readNullable(final BytesIn bytesIn, final Function<BytesIn, T> creator) {
+        return bytesIn.readBoolean() ? creator.apply(bytesIn) : null;
+    }
+
     public static <V> LongObjectHashMap<V> mergeOverride(final LongObjectHashMap<V> a, final LongObjectHashMap<V> b) {
         final LongObjectHashMap<V> res = a == null ? new LongObjectHashMap<>() : new LongObjectHashMap<>(a);
         if (b != null) {
@@ -296,13 +370,18 @@ public class SerializationUtils {
         return res;
     }
 
-    public static IntLongHashMap mergeSum(final IntLongHashMap a, final IntLongHashMap b) {
-        final IntLongHashMap res = a == null ? new IntLongHashMap() : new IntLongHashMap(a);
-        if (b != null) {
-            b.forEachKeyValue(res::addToValue);
+    public static IntLongHashMap mergeSum(final IntLongHashMap... maps) {
+        IntLongHashMap res = null;
+        for (IntLongHashMap map : maps) {
+            if (map != null) {
+                if (res == null) {
+                    res = new IntLongHashMap(map);
+                } else {
+                    map.forEachKeyValue(res::addToValue);
+                }
+            }
         }
-        return res;
+        return res != null ? res : new IntLongHashMap();
     }
-
 
 }

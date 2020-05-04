@@ -13,22 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package exchange.core2.core.processors.journalling;
+package exchange.core2.core.common;
 
-import net.openhft.chronicle.bytes.BytesIn;
-import net.openhft.chronicle.bytes.WriteBytesMarshallable;
+import lombok.Getter;
 
-import java.util.function.Function;
+@Getter
+public enum UserStatus {
+    ACTIVE(0), // normal user
+    SUSPENDED(1); // suspended
 
-public interface ISerializationProcessor {
+    private byte code;
 
-    boolean storeData(long snapshotId, SerializedModuleType type, int instanceId, WriteBytesMarshallable obj);
+    UserStatus(int code) {
+        this.code = (byte) code;
+    }
 
-    <T> T loadData(long snapshotId, SerializedModuleType type, int instanceId, Function<BytesIn, T> initFunc);
-
-    enum SerializedModuleType {
-        RISK_ENGINE,
-        MATCHING_ENGINE_ROUTER
+    public static UserStatus of(byte code) {
+        switch (code) {
+            case 0:
+                return ACTIVE;
+            case 1:
+                return SUSPENDED;
+            default:
+                throw new IllegalArgumentException("unknown UserStatus:" + code);
+        }
     }
 
 }

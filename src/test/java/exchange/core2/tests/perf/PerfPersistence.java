@@ -15,9 +15,11 @@
  */
 package exchange.core2.tests.perf;
 
+import exchange.core2.core.common.config.PerformanceConfiguration;
 import exchange.core2.tests.util.ExchangeTestContainer;
 import exchange.core2.tests.util.PersistenceTestsModule;
-import exchange.core2.tests.util.TestConstants;
+import exchange.core2.tests.util.TestDataParameters;
+import exchange.core2.tests.util.TestOrdersGeneratorConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
 
@@ -35,33 +37,31 @@ public final class PerfPersistence {
     @Test
     public void testPersistenceMargin() throws Exception {
         PersistenceTestsModule.persistenceTestImpl(
-                3_000_000,
-                1000,
-                2000,
-                10,
-                TestConstants.CURRENCIES_FUTURES,
-                1,
-                ExchangeTestContainer.AllowedSymbolTypes.FUTURES_CONTRACT,
-                1,
-                1,
-                2 * 1024,
-                1024);
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(512)
+                        .build(),
+                TestDataParameters.singlePairMarginBuilder()
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
+                        .build(),
+                10);
     }
 
     @Test
     public void testPersistenceExchange() throws Exception {
         PersistenceTestsModule.persistenceTestImpl(
-                3_000_000,
-                1000,
-                2000,
-                10,
-                TestConstants.CURRENCIES_EXCHANGE,
-                1,
-                ExchangeTestContainer.AllowedSymbolTypes.CURRENCY_EXCHANGE_PAIR,
-                1,
-                1,
-                2 * 1024,
-                1024);
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(1)
+                        .riskEnginesNum(1)
+                        .msgsInGroupLimit(512)
+                        .build(),
+                TestDataParameters.singlePairExchangeBuilder()
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
+                        .build(),
+                10);
     }
 
     /**
@@ -69,19 +69,50 @@ public final class PerfPersistence {
      * This test requires 10+ GiB free disk space, 16+ GiB of RAM and 12-threads CPU
      */
     @Test
-    public void testPersistenceMultiSymbol() throws Exception {
+    public void testPersistenceMultiSymbolMedium() throws Exception {
         PersistenceTestsModule.persistenceTestImpl(
-                5_000_000, //16.5
-                1_000_000, // 10
-                10_000_000, // 10
-                25,
-                TestConstants.ALL_CURRENCIES,
-                1_000,
-                ExchangeTestContainer.AllowedSymbolTypes.BOTH,
-                4,
-                4,
-                64 * 1024,
-                1546);
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(2)
+                        .msgsInGroupLimit(1024)
+                        .build(),
+                TestDataParameters.mediumBuilder()
+                        .allowedSymbolTypes(ExchangeTestContainer.AllowedSymbolTypes.BOTH)
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
+                        .build(),
+                25);
     }
+
+    @Test
+    public void testPersistenceMultiSymbolLarge() throws Exception {
+        PersistenceTestsModule.persistenceTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(4)
+                        .msgsInGroupLimit(1024)
+                        .build(),
+                TestDataParameters.largeBuilder()
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
+                        .build(),
+                25);
+    }
+
+    @Test
+    public void testPersistenceMultiSymbolHuge() throws Exception {
+        PersistenceTestsModule.persistenceTestImpl(
+                PerformanceConfiguration.throughputPerformanceBuilder()
+                        .ringBufferSize(32 * 1024)
+                        .matchingEnginesNum(4)
+                        .riskEnginesNum(4)
+                        .msgsInGroupLimit(1024)
+                        .build(),
+                TestDataParameters.hugeBuilder()
+                        .preFillMode(TestOrdersGeneratorConfig.PreFillMode.ORDERS_NUMBER_PLUS_QUARTER)
+                        .build(),
+                25);
+    }
+
 
 }

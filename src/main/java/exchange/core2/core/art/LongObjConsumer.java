@@ -13,15 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package exchange.core2.core.common.api;
+package exchange.core2.core.art;
 
+@FunctionalInterface
+public interface LongObjConsumer<T> {
 
-import lombok.Builder;
-
-@Builder
-public final class ApiNoOp extends ApiCommand {
-    @Override
-    public String toString() {
-        return "[RESET]";
-    }
+    /**
+     * Performs this operation on the given arguments.
+     *
+     * @param a the first input argument
+     * @param b the second input argument
+     */
+    void accept(long a, T b);
 }

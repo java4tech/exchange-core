@@ -74,7 +74,7 @@ public final class TwoStepSlaveProcessor implements EventProcessor {
         if (running.compareAndSet(IDLE, RUNNING)) {
             sequenceBarrier.clearAlert();
         } else if (running.get() == RUNNING) {
-            throw new IllegalStateException("Thread is already running");
+            throw new IllegalStateException("Thread is already running (S)");
         }
 
         nextSequence = sequence.get() + 1L;
@@ -89,7 +89,7 @@ public final class TwoStepSlaveProcessor implements EventProcessor {
                 // process batch
                 while (nextSequence <= availableSequence && nextSequence < processUpToSequence) {
                     event = dataProvider.get(nextSequence);
-                    eventHandler.onEvent(event);
+                    eventHandler.onEvent(nextSequence, event); // TODO check if nextSequence is correct (not nextSequence+-1)?
                     nextSequence++;
                 }
 

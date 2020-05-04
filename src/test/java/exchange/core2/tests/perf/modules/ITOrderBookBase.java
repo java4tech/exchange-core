@@ -15,30 +15,27 @@
  */
 package exchange.core2.tests.perf.modules;
 
-import com.lmax.disruptor.EventTranslator;
+import exchange.core2.core.common.L2MarketData;
+import exchange.core2.core.common.cmd.CommandResultCode;
+import exchange.core2.core.common.cmd.OrderCommand;
+import exchange.core2.core.orderbook.IOrderBook;
 import exchange.core2.tests.util.TestOrdersGenerator;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.AffinityLock;
 import org.junit.After;
 import org.junit.Ignore;
 import org.junit.Test;
-import exchange.core2.core.common.L2MarketData;
-import exchange.core2.core.common.MatcherEventType;
-import exchange.core2.core.common.MatcherTradeEvent;
-import exchange.core2.core.common.cmd.CommandResultCode;
-import exchange.core2.core.common.cmd.OrderCommand;
-import exchange.core2.core.orderbook.IOrderBook;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertThat;
 import static exchange.core2.core.common.OrderAction.ASK;
 import static exchange.core2.core.common.OrderAction.BID;
 import static exchange.core2.core.common.OrderType.IOC;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 
 /**
  * TODO add tests where orders for same UID ignored during matching
@@ -107,7 +104,9 @@ public abstract class ITOrderBookBase {
                     TestOrdersGenerator.UID_PLAIN_MAPPER,
                     0,
                     false,
-                    TestOrdersGenerator.createAsyncProgressLogger(numOrders));
+                    false,
+                    TestOrdersGenerator.createAsyncProgressLogger(numOrders),
+                    101572685);
             List<OrderCommand> orderCommands = genResult.getCommands();
             log.debug("orderCommands size: {}", orderCommands.size());
 
@@ -126,7 +125,8 @@ public abstract class ITOrderBookBase {
 
                 // weak compare orderBook final state just to make sure all commands executed same way
                 // TODO compare events
-                assertThat(orderBook.hashCode(), is(genResult.getFinalOrderbookHash()));
+                orderBook.validateInternalState();
+                assertThat(orderBook.stateHash(), is(genResult.getFinalOrderbookHash()));
 
                 float perfMt = (float) orderCommands.size() / (float) t / 1000.0f;
                 perfResults.add(perfMt);
@@ -142,31 +142,31 @@ public abstract class ITOrderBookBase {
 
     // ------------------------------- UTILITY METHODS --------------------------
 
-    public void checkTrade(EventTranslator<MatcherTradeEvent> translatorLambda, long activeId, long matchedId, long price, long size) {
-
-        MatcherTradeEvent event = new MatcherTradeEvent();
-        translatorLambda.translateTo(event, 0);
-
-        assertThat(event.eventType, is(MatcherEventType.TRADE));
-
-        assertThat(event.activeOrderId, is(activeId));
-        assertThat(event.matchedOrderId, is(matchedId));
-        assertThat(event.price, is(price));
-        assertThat(event.size, is(size));
-        // TODO add more checks for MatcherTradeEvent
-    }
-
-    public void checkRejection(EventTranslator<MatcherTradeEvent> translatorLambda, long activeId, long size) {
-
-        MatcherTradeEvent event = new MatcherTradeEvent();
-        translatorLambda.translateTo(event, 0);
-
-        assertThat(event.eventType, is(MatcherEventType.REJECTION));
-
-        assertThat(event.activeOrderId, is(activeId));
-        assertThat(event.size, is(size));
-        // TODO add more checks for MatcherTradeEvent
-    }
+//    public void checkTrade(EventTranslator<MatcherTradeEvent> translatorLambda, long activeId, long matchedId, long price, long size) {
+//
+//        MatcherTradeEvent event = new MatcherTradeEvent();
+//        translatorLambda.translateTo(event, 0);
+//
+//        assertThat(event.eventType, is(MatcherEventType.TRADE));
+//
+//        assertThat(event.activeOrderId, is(activeId));
+//        assertThat(event.matchedOrderId, is(matchedId));
+//        assertThat(event.price, is(price));
+//        assertThat(event.size, is(size));
+//        // TODO add more checks for MatcherTradeEvent
+//    }
+//
+//    public void checkRejection(EventTranslator<MatcherTradeEvent> translatorLambda, long activeId, long size) {
+//
+//        MatcherTradeEvent event = new MatcherTradeEvent();
+//        translatorLambda.translateTo(event, 0);
+//
+//        assertThat(event.eventType, is(MatcherEventType.REJECTION));
+//
+//        assertThat(event.activeOrderId, is(activeId));
+//        assertThat(event.size, is(size));
+//        // TODO add more checks for MatcherTradeEvent
+//    }
 
     @Ignore
     @Test
